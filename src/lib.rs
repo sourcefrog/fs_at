@@ -541,28 +541,35 @@ mod tests {
                 .collect::<Result<Vec<DirEntry>>>()?
                 .len()
         );
-        let mut options = OpenOptions::default();
-        options.create_new(true).write(OpenOptionsWriteMode::Write);
-        options.open_at(&mut parent_dir, "1")?;
-        options.open_at(&mut parent_dir, "2")?;
-        options.mkdir_at(&mut parent_dir, "child")?;
-        options.open_at(&mut parent_dir, "child\\3")?;
-        let children = read_dir(&mut parent_dir)?.collect::<Result<Vec<_>>>()?;
         let dir_present =
             |children: &Vec<DirEntry>, name: &OsStr| children.iter().any(|e| e.name() == name);
-        assert!(dir_present(&children, OsStr::new("1")), "{:?}", children);
-        assert!(dir_present(&children, OsStr::new("2")), "{:?}", children);
-        assert!(
-            dir_present(&children, OsStr::new("child")),
-            "{:?}",
-            children
-        );
-        let mut child = OpenOptions::default()
-            .read(true)
-            .open_at(&mut parent_dir, "child")?;
-        let children = read_dir(&mut child)?.collect::<Result<Vec<_>>>()?;
-        assert_eq!(3, children.len());
-        assert!(dir_present(&children, OsStr::new("3")), "{:?}", children);
+        {
+            let mut options = OpenOptions::default();
+            options.create_new(true).write(OpenOptionsWriteMode::Write);
+            options.open_at(&mut parent_dir, "1")?;
+            options.open_at(&mut parent_dir, "2")?;
+            options.open_at(&mut options.mkdir_at(&mut parent_dir, "child")?, "3")?;
+            let children = read_dir(&mut parent_dir)?.collect::<Result<Vec<_>>>()?;
+            assert!(dir_present(&children, OsStr::new("1")), "{:?}", children);
+            assert!(dir_present(&children, OsStr::new("2")), "{:?}", children);
+            assert!(
+                dir_present(&children, OsStr::new("child")),
+                "{:?}",
+                children
+            );
+        }
+        {
+            let mut child = OpenOptions::default()
+                .read(true)
+                .open_at(&mut parent_dir, "child")?;
+            // Something is permitting the fd for child to be dropped before the
+            // read_dir fcntl to duplicate the fd. Possibly the FD is writing
+            // over some other fd which is then separately dropped?
+            // eprintln!("More Magic");
+            let children = read_dir(&mut child)?.collect::<Result<Vec<_>>>()?;
+            assert_eq!(3, children.len(), "{:?}", children);
+            assert!(dir_present(&children, OsStr::new("3")), "{:?}", children);
+        }
         Ok(())
     }
 }

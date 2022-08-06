@@ -195,7 +195,8 @@ impl<'a> ReadDirImpl<'a> {
     pub fn new(dir_file: &'a mut File) -> Result<Self> {
         // clone the FD - Nix takes ownership of the FD, but we're not
         // implementing TryInto here.
-        let new_fd = cvt_r(|| unsafe { libc::fcntl(dir_file.as_raw_fd(), libc::F_DUPFD_CLOEXEC) })?;
+        let new_fd =
+            cvt_r(|| unsafe { libc::fcntl(dir_file.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) })?;
         Ok(ReadDirImpl {
             iter: Dir::from_fd(new_fd)?.into_iter(),
             _phantom: PhantomData,
@@ -213,7 +214,7 @@ impl Iterator for ReadDirImpl<'_> {
             Some(Err(_e)) => Some(Err(std::io::Error::from_raw_os_error(errno::errno()))),
             Some(Ok(e)) => {
                 let name = OsStr::from_bytes(e.file_name().to_bytes()).to_os_string();
-                Some(Ok(DirEntryImpl { e, name }))
+                Some(Ok(DirEntryImpl { name }))
             }
         }
     }
@@ -221,7 +222,6 @@ impl Iterator for ReadDirImpl<'_> {
 
 #[derive(Debug)]
 pub(crate) struct DirEntryImpl {
-    e: dir::Entry,
     name: OsString,
 }
 
