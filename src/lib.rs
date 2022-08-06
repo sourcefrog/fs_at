@@ -24,7 +24,7 @@ cfg_if::cfg_if! {
     if #[cfg(windows)] {
         mod win;
 
-        use win::OpenOptionsImpl;
+        use win::{OpenOptionsImpl, ReadDirImpl, DirEntryImpl};
     } else {
         mod unix;
 
@@ -184,6 +184,11 @@ impl OpenOptions {
     /// This will honour the options set for creation/append etc, but will only
     /// operate relative to d. To open a file with an absolute path, use the
     /// stdlib fs::OpenOptions.
+    ///
+    /// Note: On Windows this uses low level APIs that do not perform path
+    /// separator translation: if passing a path containing a separator, it must
+    /// be a platform native one. e.g. `foo\\bar` on Windows, vs `foo/bar` on
+    /// most other OS's.
     pub fn open_at<P: AsRef<Path>>(&self, d: &mut File, p: P) -> Result<File> {
         self._impl.open_at(d, OpenOptions::ensure_root(p.as_ref())?)
     }
@@ -232,8 +237,16 @@ impl Iterator for ReadDir<'_> {
 /// The returned type for each entry found by [`read_dir`].
 ///
 /// Each entry represents a single entry inside the directory. Platforms that
-/// provide rich metadata expose this through the methods on DirEntry.
-#[derive(Debug, PartialEq)]
+/// provide rich metadata may in future expose this through methods or extension
+/// traits on DirEntry.
+///
+/// For now however, only the [`name()`] is exposed. This does not imply any
+/// additional IO for most workloads: metadata returned from a directory listing
+/// is inherently racy: presuming that what was a dir, or symlink etc when the
+/// directory was listed, will still be the same when opened is fallible.
+/// Instead, use open_at to open the contents, and then process based on the
+/// type of content found.
+#[derive(Debug)]
 pub struct DirEntry {
     _impl: DirEntryImpl,
 }
@@ -532,12 +545,24 @@ mod tests {
         options.create_new(true).write(OpenOptionsWriteMode::Write);
         options.open_at(&mut parent_dir, "1")?;
         options.open_at(&mut parent_dir, "2")?;
-        options.open_at(&mut parent_dir, "3")?;
+        options.mkdir_at(&mut parent_dir, "child")?;
+        options.open_at(&mut parent_dir, "child\\3")?;
         let children = read_dir(&mut parent_dir)?.collect::<Result<Vec<_>>>()?;
-        let dir_present = |name: &OsStr| children.iter().find(|e| e.name() == name).is_some();
-        assert!(dir_present(OsStr::new("1")));
-        assert!(dir_present(OsStr::new("2")));
-        assert!(dir_present(OsStr::new("3")));
+        let dir_present =
+            |children: &Vec<DirEntry>, name: &OsStr| children.iter().any(|e| e.name() == name);
+        assert!(dir_present(&children, OsStr::new("1")), "{:?}", children);
+        assert!(dir_present(&children, OsStr::new("2")), "{:?}", children);
+        assert!(
+            dir_present(&children, OsStr::new("child")),
+            "{:?}",
+            children
+        );
+        let mut child = OpenOptions::default()
+            .read(true)
+            .open_at(&mut parent_dir, "child")?;
+        let children = read_dir(&mut child)?.collect::<Result<Vec<_>>>()?;
+        assert_eq!(3, children.len());
+        assert!(dir_present(&children, OsStr::new("3")), "{:?}", children);
         Ok(())
     }
 }
