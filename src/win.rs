@@ -20,8 +20,8 @@ use ntapi::ntioapi::{
 use winapi::{
     ctypes,
     shared::{
-        minwindef::ULONG,
-        ntdef::{NULL, OBJECT_ATTRIBUTES, OBJ_CASE_INSENSITIVE, PLARGE_INTEGER, PVOID},
+        minwindef::{LPVOID, ULONG},
+        ntdef::{HANDLE, NULL, OBJECT_ATTRIBUTES, OBJ_CASE_INSENSITIVE, PLARGE_INTEGER, PVOID},
         winerror::{ERROR_INVALID_PARAMETER, ERROR_NO_MORE_FILES},
     },
     um::{
@@ -573,9 +573,9 @@ impl<'a> ReadDirImpl<'a> {
         // ```
         let result = cvt::cvt(unsafe {
             GetFileInformationByHandleEx(
-                self.d.as_raw_handle(),
+                self.d.as_raw_handle() as HANDLE,
                 class,
-                buffer.as_mut_ptr() as *mut c_void,
+                buffer.as_mut_ptr() as LPVOID,
                 buffer.len() as u32,
             )
         });
