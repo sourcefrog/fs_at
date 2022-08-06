@@ -1,7 +1,8 @@
 use std::{
-    ffi::CString,
+    ffi::{CString, OsStr, OsString},
     fs::File,
     io::Result,
+    marker::PhantomData,
     os::unix::prelude::{AsRawFd, FromRawFd, OsStrExt},
     path::Path,
 };
@@ -18,6 +19,10 @@ cfg_if::cfg_if! {
 
 use cvt::cvt_r;
 use libc::{c_int, mkdirat, mode_t};
+use nix::{
+    dir::{self, Dir},
+    errno,
+};
 
 use crate::{OpenOptions, OpenOptionsWriteMode};
 
@@ -177,6 +182,52 @@ impl OpenOptionsExt for OpenOptions {
     fn mode(&mut self, mode: mode_t) -> &mut Self {
         self._impl.mode = Some(mode);
         self
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct ReadDirImpl<'a> {
+    iter: dir::OwningIter,
+    _phantom: PhantomData<&'a File>,
+}
+
+impl<'a> ReadDirImpl<'a> {
+    pub fn new(dir_file: &'a mut File) -> Result<Self> {
+        // clone the FD - Nix takes ownership of the FD, but we're not
+        // implementing TryInto here.
+        let new_fd = cvt_r(|| unsafe { libc::fcntl(dir_file.as_raw_fd(), libc::F_DUPFD_CLOEXEC) })?;
+        Ok(ReadDirImpl {
+            iter: Dir::from_fd(new_fd)?.into_iter(),
+            _phantom: PhantomData,
+        })
+    }
+}
+
+impl Iterator for ReadDirImpl<'_> {
+    type Item = Result<DirEntryImpl>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let item = self.iter.next();
+        match item {
+            None => None,
+            Some(Err(_e)) => Some(Err(std::io::Error::from_raw_os_error(errno::errno()))),
+            Some(Ok(e)) => {
+                let name = OsStr::from_bytes(e.file_name().to_bytes()).to_os_string();
+                Some(Ok(DirEntryImpl { e, name }))
+            }
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct DirEntryImpl {
+    e: dir::Entry,
+    name: OsString,
+}
+
+impl DirEntryImpl {
+    pub fn name(&self) -> &OsStr {
+        &self.name
     }
 }
 

@@ -14,6 +14,7 @@
 //! unified Rust-y interface to these calls.
 
 use std::{
+    ffi::OsStr,
     fs::File,
     io::{Error, ErrorKind, Result},
     path::Path,
@@ -27,7 +28,7 @@ cfg_if::cfg_if! {
     } else {
         mod unix;
 
-        use unix::OpenOptionsImpl;
+        use unix::{OpenOptionsImpl, ReadDirImpl, DirEntryImpl};
     }
 }
 
@@ -198,6 +199,58 @@ impl OpenOptions {
     }
 }
 
+/// Iterate over the contents of a directory. Created by calling read_dir() on
+/// an opened directory. Each item yielded by the iterator is an io::Result to
+/// allow communication of io errors as the iterator is advanced.
+///
+/// To the greatest extent possible the underlying OS semantics are preserved.
+/// That means that `.` and `..` entries are exposed, and that no sort order is
+/// guaranteed by the iterator.
+#[derive(Debug)]
+pub struct ReadDir<'a> {
+    _impl: ReadDirImpl<'a>,
+}
+
+impl<'a> ReadDir<'a> {
+    pub fn new(d: &'a mut File) -> Result<Self> {
+        Ok(ReadDir {
+            _impl: ReadDirImpl::new(d)?,
+        })
+    }
+}
+
+impl Iterator for ReadDir<'_> {
+    type Item = Result<DirEntry>;
+
+    fn next(&mut self) -> Option<Result<DirEntry>> {
+        self._impl
+            .next()
+            .map(|entry| entry.map(|_impl| DirEntry { _impl }))
+    }
+}
+
+/// The returned type for each entry found by [`read_dir`].
+///
+/// Each entry represents a single entry inside the directory. Platforms that
+/// provide rich metadata expose this through the methods on DirEntry.
+#[derive(Debug, PartialEq)]
+pub struct DirEntry {
+    _impl: DirEntryImpl,
+}
+
+impl DirEntry {
+    pub fn name(&self) -> &OsStr {
+        self._impl.name()
+    }
+}
+
+/// Read the children of the directory d.
+///
+/// See [`ReadDir`] and [`DirEntry`] for details.
+pub fn read_dir(d: &mut File) -> Result<ReadDir> {
+    ReadDir::new(d)
+}
+
 pub mod os {
     cfg_if::cfg_if! {
         if #[cfg(windows)] {
@@ -214,6 +267,7 @@ pub mod testsupport;
 #[cfg(test)]
 mod tests {
     use std::{
+        ffi::OsStr,
         fs::{rename, File},
         io::{Error, ErrorKind, Result, Seek, SeekFrom, Write},
         path::PathBuf,
@@ -221,7 +275,7 @@ mod tests {
 
     use tempfile::TempDir;
 
-    use crate::{testsupport::open_dir, OpenOptions, OpenOptionsWriteMode};
+    use crate::{read_dir, testsupport::open_dir, DirEntry, OpenOptions, OpenOptionsWriteMode};
 
     /// Create a directory parent, open it, then rename it to renamed-parent and
     /// create another directory in its place. returns the file handle and the
@@ -462,6 +516,28 @@ mod tests {
                 }
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn readdir() -> Result<()> {
+        let (_tmp, mut parent_dir, _pathname) = setup()?;
+        assert_eq!(
+            2,
+            read_dir(&mut parent_dir)?
+                .collect::<Result<Vec<DirEntry>>>()?
+                .len()
+        );
+        let mut options = OpenOptions::default();
+        options.create_new(true).write(OpenOptionsWriteMode::Write);
+        options.open_at(&mut parent_dir, "1")?;
+        options.open_at(&mut parent_dir, "2")?;
+        options.open_at(&mut parent_dir, "3")?;
+        let children = read_dir(&mut parent_dir)?.collect::<Result<Vec<_>>>()?;
+        let dir_present = |name: &OsStr| children.iter().find(|e| e.name() == name).is_some();
+        assert!(dir_present(OsStr::new("1")));
+        assert!(dir_present(OsStr::new("2")));
+        assert!(dir_present(OsStr::new("3")));
         Ok(())
     }
 }
