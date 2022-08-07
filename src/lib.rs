@@ -534,22 +534,30 @@ mod tests {
 
     #[test]
     fn readdir() -> Result<()> {
-        let (_tmp, mut parent_dir, _pathname) = setup()?;
+        let (_tmp, mut parent_dir, pathname) = setup()?;
         assert_eq!(
-            2,
+            2, // . and ..
             read_dir(&mut parent_dir)?
                 .collect::<Result<Vec<DirEntry>>>()?
                 .len()
         );
+        assert!(pathname.is_dir());
         let dir_present =
             |children: &Vec<DirEntry>, name: &OsStr| children.iter().any(|e| e.name() == name);
         {
             let mut options = OpenOptions::default();
             options.create_new(true).write(OpenOptionsWriteMode::Write);
             options.open_at(&mut parent_dir, "1")?;
+            assert!(pathname.join("1").is_file());
             options.open_at(&mut parent_dir, "2")?;
+            assert!(pathname.join("2").is_file());
             options.open_at(&mut options.mkdir_at(&mut parent_dir, "child")?, "3")?;
             let children = read_dir(&mut parent_dir)?.collect::<Result<Vec<_>>>()?;
+            assert_eq!(
+                children.len(),
+                5,
+                "directory contains 5 entries (., .., 1, 2, child)"
+            );
             assert!(dir_present(&children, OsStr::new("1")), "{:?}", children);
             assert!(dir_present(&children, OsStr::new("2")), "{:?}", children);
             assert!(

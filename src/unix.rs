@@ -197,6 +197,10 @@ impl<'a> ReadDirImpl<'a> {
         // implementing TryInto here.
         let new_fd =
             cvt_r(|| unsafe { libc::fcntl(dir_file.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) })?;
+        // Seek back to the start of the directory: the file descriptor might be
+        // at some arbitrary position before, including if the directory was
+        // previously read.
+        cvt_r(|| unsafe { libc::lseek(new_fd, 0, libc::SEEK_SET) })?;
         Ok(ReadDirImpl {
             iter: Dir::from_fd(new_fd)?.into_iter(),
             _phantom: PhantomData,
